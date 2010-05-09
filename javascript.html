@@ -1,0 +1,347 @@
+<html>
+  <head>
+    <script src="http://init.ca/buses/explore/global.js" type="text/javascript"></script>
+    <script src="http://init.ca/buses/explore/prototype.js" type="text/javascript"></script>
+    <script src="http://init.ca/buses/explore/scriptaculous.js" type="text/javascript"></script>
+    <script>
+var data_channel = -1;
+var canvas = null;
+var ctx = null;
+var data_chan = new XMLHttpRequest();
+var control_chan = new XMLHttpRequest();
+var zoom_v = 1.0;
+var res_v = 2;
+var view = [400, 400];
+var zoom_range = [200, 200, 36000, 36000];
+var offset = [(zoom_range[2] / 2) | 0, (zoom_range[3] / 2) | 0];
+var old_mdown = null;
+var old_mup = null;
+var old_mmove = null;
+var clear = false;
+var x;
+var y;
+var need_refresh = true;
+var boxes = {'red': true, 'green': true, 'blue': true};
+
+function handle_data_channel(e)
+{
+  if(data_chan && data_chan.readyState == 4)
+  {
+    if(data_channel == -1)
+    {
+      data_channel = data_chan.responseText;
+      debug('Created data channel at file descriptor: ' + data_channel);
+      return true;
+    }
+    else
+    {
+      var s = data_chan.responseText;
+      var i = 0;
+      if(s.substring(0, 4) == "CLRS")
+      {
+        ctx.clearRect(0, 0, 400, 400);
+        i += 2;
+      }
+      var len = s.length / 2; 
+      var n_samples;
+      var j;
+      var r;
+      var g;
+      var b;
+      while(i < len)
+      {
+        r = num(s, i++);
+        g = num(s, i++);
+        b = num(s, i++);
+        n_samples = num(s, i++);
+        x = num(s, i++);
+        y = num(s, i++);
+        if(n_samples > 1)
+        {
+          ctx.beginPath();
+          ctx.moveTo(x, y);
+          for(j = 1; j < n_samples; j++)
+          {
+            x = num(s, i++);
+            y = num(s, i++);
+            ctx.lineTo(x, y);
+          }
+          ctx.strokeStyle = "rgb(" + r + "," + g + "," + b + ")";
+          ctx.stroke();
+        }
+      }
+    }
+  }
+  return true;
+}
+
+function num(s, i)
+{
+  var v = ((s.charCodeAt(2 * i + 1) & 0xff) << 8) | (s.charCodeAt(2 * i) & 0xff);
+  if(v > 0x7fff)
+  {
+    v = (v - 0xffff - 1);
+  }
+  // debug((s.charCodeAt(2 * i + 1) & 0xff) + " + " + (s.charCodeAt(2 * i) & 0xff) + " = " + v);
+  return v;
+}
+
+function debug(s)
+{
+  el = document.getElementById("debug");
+  el.innerHTML = s + "\n" + el.innerHTML;
+}
+
+function get_data_channel()
+{
+  data_chan.multipart = true;
+  data_chan.open('GET', '/data', true);
+  data_chan.setRequestHeader("Cache-Control", "no-cache");
+  data_chan.setRequestHeader("Pragma", "no-cache");
+  data_chan.setRequestHeader("Connection", "keep-alive");
+  data_chan.setRequestHeader("Keep-Alive", "3600");
+  data_chan.overrideMimeType("text/plain; charset=x-user-defined")
+  data_chan.onload = handle_data_channel;
+  data_chan.send('');
+}
+
+function handle_control_channel(e)
+{
+  if ( control_chan.readyState == 4 )
+  {
+    return true;
+  }
+  else
+  {
+    alert("Error getting control.");
+  }
+}
+
+function debug_state(e)
+{
+  if(control_chan && control_chan.readyState == 1)
+  {
+     // control_chan.send(null);
+  }
+}
+
+function refresh()
+{
+  if(need_refresh && (control_chan.readyState == 4 || control_chan.readyState == 0))
+  {
+    send_control_request();
+    need_refresh = false;
+  }
+  setTimeout("refresh()", 100);
+}
+
+function get_mask()
+{
+  return (boxes['red'] ? 1 : 0) + (boxes['green'] ? 2 : 0) + (boxes['blue'] ? 4 : 0);
+}
+function send_control_request()
+{
+  var el = document.getElementById("debug");
+  if(data_channel != -1)
+  {
+    var x_range = ((zoom_range[0] + zoom_v * (zoom_range[2] - zoom_range[0])) / 2) | 0; 
+    var y_range = ((zoom_range[1] + zoom_v * (zoom_range[3] - zoom_range[1])) / 2) | 0;
+    var frame = [offset[0] - x_range, offset[1] - y_range, offset[0] + x_range, offset[1] + y_range];
+    var req = '/control/' + data_channel + '/' + view[0] + '/' + view[1] + '/' + frame[0] + '/' + frame[1] + '/' + frame[2] + '/' + frame[3] + '/' + res_v + 
+        '/' + get_mask();
+    control_chan.open('GET', req, true);
+    control_chan.setRequestHeader("Pragma", "no-cache");
+    control_chan.setRequestHeader("Cache-Control", "no-cache");
+    control_chan.onreadystatechange = debug_state;
+    control_chan.onload = handle_data_channel;
+    control_chan.send(null);
+    el.innerHTML = "Request: " + req + ".\n" + el.innerHTML;
+  }
+  else
+  {
+    el.innerHTML = "No data channel.\n" + el.innerHTML;
+  }
+}
+
+var delay = false;
+
+function wait_for_data_channel()
+{
+  if(!delay)
+  {
+    delay = true;
+    setTimeout("wait_for_data_channel()", 200);
+  }
+  else 
+  {
+    if(data_channel == -1)
+    {
+      setTimeout("wait_for_data_channel()", 200);
+    }
+    else
+    {
+      refresh();
+    }
+  }
+}
+
+function init_canvas()
+{
+  canvas = document.getElementById("canvas");
+  ctx = canvas.getContext("2d");
+  ctx.fillStyle = "rgba(255,255,255,1.0)"; 
+  ctx.lineWidth = 0.5;
+}
+
+var last_x = -1000;
+var last_y = -1000;
+var dragging = false;
+
+function start_drag(e)
+{
+  var obj =  e.target;
+  if(obj.id == "canvas")
+  {
+    dragging = true;
+    old_mmove = document.onmousemove;
+    last_x = e.pageX;
+    last_y = e.pageY;
+    document.onmousemove=drag;
+  }
+  if(old_mdown)
+  {
+    return old_mdown(e);
+  }
+  else
+  {
+    return false;
+  }
+}
+
+function finish_drag(e)
+{
+  if(dragging)
+  {
+    document.onmousemove = old_mmove;
+    dragging = false;
+  }
+  if(old_mup)
+  {
+    return old_mup(e);
+  }
+  else
+  {
+    return false;
+  }
+}
+
+function drag(e)
+{
+  if(!e) var e = window.event;
+  var pos_x = e.pageX;
+  var pos_y = e.pageY;
+
+  el = document.getElementById('debug');
+  if(dragging && (last_x != pos_x || last_y != pos_y))
+  {
+    var diff_x = last_x - pos_x;
+    var diff_y = last_y - pos_y;
+    var x_range = (zoom_range[0] + zoom_v * (zoom_range[2] - zoom_range[0])) / view[0]; 
+    var y_range = (zoom_range[1] + zoom_v * (zoom_range[3] - zoom_range[1])) / view[1];
+    offset[0] = (offset[0] + diff_x * x_range) | 0;
+    offset[1] = (offset[1] + diff_y * y_range) | 0;
+    last_x = pos_x;
+    last_y = pos_y;
+    need_refresh = true;
+  }
+}
+
+function checkbox_action(box)
+{
+  var a = box.value; 
+  if(a)
+  {
+    if(boxes[a] && boxes[a] == true)
+    {
+      boxes[a] = false;
+    }
+    else
+    {
+      boxes[a] = true;
+    }
+    need_refresh = true;
+  }
+}
+
+function checkbox_init()
+{
+  for(var a in boxes)
+  {
+    $(a).checked = boxes[a]; 
+  }
+  need_refresh = true;
+}
+ </script>
+    <style>
+div.sliderbox
+{
+  float: left;
+  margin: 2em;
+  width: 50px;
+}
+.sliderbox p
+{ 
+  margin-top: 0;
+  margin-bottom: 0.5em;
+}
+    </style>
+  </head>
+  <body>
+    <!--input type="submit" value="Create Data Channel" onclick="get_data_channel()"/>
+    <input type="submit" value="Get Data Channel" onclick="send_control_request()"/-->
+    <pre id="debug" style="position: absolute; width: 40em; top: 450px; left: 20px; border: 1px solid #777; height: 10em; overflow: auto;">
+    </pre>
+    <div style="margin-left: 450px; margin-top: 20px;">
+      <div style="border: 1px dashed red; padding: 0.3em; background-color: #FAFF94; width: auto; font-weight: bold">
+        This page only works properly with Firefox.<br/>
+        <small>You also need Javascript enabled and a reasonably fast connection</small>
+      </div>
+    
+    <div class="sliderbox">
+      <p>
+        <strong>Resolution:</strong>
+      </p>
+      <div id="r" style="width:5px;background-color:#aaa;height:150px;">
+          <div id="rh" style="height:10px;width:20px;background-color:#f00;cursor:move;"></div>
+      </div>
+    </div>
+    <div class="sliderbox">
+      <p>
+        <strong>Zoom:</strong>
+      </p>
+      <div id="z" style="width:5px;background-color:#aaa;height:150px;">
+          <div id="zh" style="height:10px;width:20px;background-color:#f00;cursor:move;"></div>
+      </div>
+    </div>
+    <div style="float: left; margin: 2em;">
+    <input type="checkbox" id="red" value="red"     onchange="checkbox_action(this)"><span style="color: #B40000">Red</span></input><br/>
+    <input type="checkbox" id="green" value="green" onchange="checkbox_action(this)"><span style="color: #00B400">Green</span></input><br/>
+    <input type="checkbox" id="blue" value="blue"   onchange="checkbox_action(this)"><span style="color: #0000B4">Blue</span></input><br/>
+    </div>
+    </div>
+    <div style="clear:both;margin-left: 450px;">Drag the map for panning the view.</div>
+    <canvas id="canvas" width="400" height="400" style="border: 1px solid red; position: absolute; top: 20px; left: 20px; cursor: move;"/>
+    <script type="text/javascript">
+      checkbox_init();
+      get_data_channel();
+      init_canvas();
+      new Control.Slider('zh','z', { axis: 'vertical', sliderValue: zoom_v, onSlide:function(v){ zoom_v = v; need_refresh = true; }, onChange:function(v){ zoom_v = v; need_refresh = true; }});
+      new Control.Slider('rh','r', { axis: 'vertical', range: $R(1,10), values:[1,2,3,4,5,6,7,8,9,10], sliderValue: res_v, onSlide:function(v){ res_v = v; need_refresh = true; }, onChange:function(v){ res_v = v; need_refresh = true; }});
+      wait_for_data_channel();
+      old_mdown = document.onmousedown;
+      old_mup = document.onmouseup;
+      document.onmousedown = start_drag;
+      document.onmouseup = finish_drag;
+    </script>
+  </body>
+</html>
